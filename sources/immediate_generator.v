@@ -21,17 +21,12 @@ module ImmGen (
 
             // S-type immediates (SW)
             7'b0100011:
-                imm_out = {{20{instr_code[31]}},
-                            instr_code[31:25],
-                            instr_code[11:7]};
+                imm_out = {{20{instr_code[31]}}, instr_code[31:25], instr_code[11:7]};
 
             // B-type immediates (Branches)
             7'b1100011:
-                imm_out = {{20{instr_code[31]}},
-                            instr_code[7],
-                            instr_code[30:25],
-                            instr_code[11:8],
-                            1'b0};
+                imm_out = {{20{instr_code[31]}}, instr_code[7],
+                           instr_code[30:25], instr_code[11:8], 1'b0};
 
             // U-type immediates (LUI, AUIPC)
             7'b0110111,
@@ -40,15 +35,11 @@ module ImmGen (
 
             // J-type immediates (JAL)
             7'b1101111:
-                imm_out = {{12{instr_code[31]}},
-                            instr_code[19:12],
-                            instr_code[20],
-                            instr_code[30:21],
-                            1'b0};
+                imm_out = {{12{instr_code[31]}}, instr_code[19:12],
+                           instr_code[20], instr_code[30:21], 1'b0};
 
             // Unsupported instruction
-            default:
-                imm_out = 32'b0;
+            default: imm_out = 32'b0;
         endcase
     end
 
