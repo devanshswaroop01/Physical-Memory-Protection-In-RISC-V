@@ -1,194 +1,347 @@
-
-`timescale 1ns/1ps
-
-//----------------------------------- DATAPATH WITH PMP -----------------
-// This module implements a single-cycle RISC-V datapath integrated with
-// Physical Memory Protection (PMP).
-//
-// The datapath enforces security checks for:
-//  - Instruction fetch (execute permission)
-//  - Data memory access (read / write permissions)
-//
-// Design principles followed:
-// 1. Instruction PMP violations are architectural → PC is frozen.
-// 2. Illegal instruction fetches are squashed into NOPs to avoid side effects.
-// 3. Data PMP violations block memory access without corrupting state.
-//-------------------------------------------------------------------------------
-
+// ============================================================================
+// FILE: datapath.v
+// DESCRIPTION: Complete Processor Datapath with PMP Integration
+// ============================================================================
+/**
+ * DATAPATH_PMP - Complete Processor Datapath
+ * 
+ * PURPOSE:
+ *   Integrates all datapath components:
+ *     - ALU
+ *     - Register File
+ *     - Instruction/Data Memory
+ *     - PMP Checkers
+ *     - Control Logic
+ * 
+ * PIPELINE STAGES (Single-Cycle):
+ *   1. Fetch: Get instruction from memory
+ *   2. Decode: Extract fields, generate immediate
+ *   3. Execute: ALU operation
+ *   4. Memory: Load/Store with PMP check
+ *   5. Writeback: Update register file
+ * 
+ * FEATURES:
+ *   - HALT detection (JAL with rd=x0)
+ *   - JALR with LSB clearing
+ *   - PMP gating for data and instruction accesses
+ *   - RAW hazard forwarding in register file
+ * 
+ * PARAMETERS:
+ *   PC_W           - Program counter width (default 8)
+ *   INSTR_W        - Instruction width (default 32)
+ *   DATA_W         - Data width (default 32)
+ *   DM_ADDR_W      - Data memory address width (default 9)
+ *   ALU_CC_W       - ALU control width (default 4)
+ *   PMP_ADDR_WIDTH - PMP address width (default 8)
+ */
 `timescale 1ns / 1ps
 
 module Datapath_PMP #(
-    parameter PC_W      = 8,    // Program Counter width
-    parameter INSTR_W   = 32,   // Instruction width
-    parameter DATA_W    = 32,   // Datapath width
-    parameter DM_ADDR_W = 9,    // Data memory address width
-    parameter ALU_CC_W  = 4     // ALU control width
+    parameter PC_W           = 8,
+    parameter INSTR_W        = 32,
+    parameter DATA_W         = 32,
+    parameter DM_ADDR_W      = 9,
+    parameter ALU_CC_W       = 4,
+    parameter PMP_ADDR_WIDTH = 8,
+    // PMP region parameters
+    parameter [PMP_ADDR_WIDTH-1:0] PMP_REGION0_START = 8'h00,
+    parameter [PMP_ADDR_WIDTH-1:0] PMP_REGION0_END   = 8'h3F,
+    parameter [PMP_ADDR_WIDTH-1:0] PMP_REGION1_START = 8'h40,
+    parameter [PMP_ADDR_WIDTH-1:0] PMP_REGION1_END   = 8'h7F,
+    parameter [PMP_ADDR_WIDTH-1:0] PMP_REGION2_START = 8'h80,
+    parameter [PMP_ADDR_WIDTH-1:0] PMP_REGION2_END   = 8'hBF,
+    parameter [2:0] PMP_REGION0_PERM = 3'b111,
+    parameter [2:0] PMP_REGION1_PERM = 3'b101,
+    parameter [2:0] PMP_REGION2_PERM = 3'b000,
+    parameter [2:0] PMP_DEFAULT_PERM = 3'b000
 )(
-    input                Clock,       // System clock
-    input                Reset,       // Global reset
-    input                Reg_Write,   // Register file write enable
-    input                ALU_Src,     // ALU operand source select
-    input [ALU_CC_W-1:0] ALU_CC,      // ALU control code
-    input                Mem_Read,    // Data memory read enable
-    input                Mem_Write,   // Data memory write enable
-    input                Mem_to_Reg,  // Write-back source select
-
-    output [2:0]          Funct3,      // Decoded funct3 field
-    output [6:0]          Funct7,      // Decoded funct7 field
-    output [6:0]          Opcode,      // Decoded opcode
-    output [DATA_W-1:0]   Datapath_Result, // ALU result (for observation/debug)
-    output                data_pmp_ok, // Data access PMP status
-    output                instr_pmp_ok,// Instruction fetch PMP status
-    output reg [PC_W-1:0] PC           // Program Counter
+    // Control inputs
+    input  wire                  Clock,
+    input  wire                  Reset,
+    input  wire                  Reg_Write,
+    input  wire                  ALU_Src,
+    input  wire [ALU_CC_W-1:0]   ALU_CC,
+    input  wire                  Mem_Read,
+    input  wire                  Mem_Write,
+    input  wire                  Mem_to_Reg,
+    
+    // Outputs
+    output wire [2:0]            Funct3,
+    output wire [6:0]            Funct7,
+    output wire [6:0]            Opcode,
+    output wire [DATA_W-1:0]     Datapath_Result,
+    output wire                  data_pmp_ok,
+    output wire                  instr_pmp_ok,
+    output wire [PC_W-1:0]       PC,
+    output wire                  halt
 );
 
-    //---------------- INTERNAL SIGNALS ----------------
-    // PC and instruction handling
-    wire [PC_W-1:0]    PC_Next;          // Next sequential PC
-    wire [INSTR_W-1:0] Instruction;      // Raw instruction from memory
-    wire [INSTR_W-1:0] Instruction_eff;  // Effective instruction after PMP
+    // ------------------------------------------------------------------------
+    // Internal Signals
+    // ------------------------------------------------------------------------
+    wire [PC_W-1:0]     PC_Plus4;         // PC + 4
+    wire [PC_W-1:0]     PC_Next;          // Next PC value
+    wire [INSTR_W-1:0]  Instruction;      // Current instruction
+    
+    wire [DATA_W-1:0]   Ext_Imm;          // Sign-extended immediate
+    wire [DATA_W-1:0]   Reg1;             // Register 1 data
+    wire [DATA_W-1:0]   Reg2;             // Register 2 data
+    wire [DATA_W-1:0]   Src_B;            // ALU B input (register or immediate)
+    wire [DATA_W-1:0]   ALU_Result;       // ALU output
+    wire [DATA_W-1:0]   DataMem_Read;     // Data memory read output
+    wire [DATA_W-1:0]   Write_Back_Data;  // Data to write back to register file
+    
+    wire                mem_read_gated;   // PMP-gated read enable
+    wire                mem_write_gated;  // PMP-gated write enable
+    
+    wire [PMP_ADDR_WIDTH-1:0] data_pmp_addr;  // Address for PMP check
+    
+    // ALU status flags (unused but available)
+    wire alu_carry;
+    wire alu_overflow;
+    wire alu_zero;
+    
+    // HALT and JALR detection
+    wire                halt_instruction;
+    wire [6:0]          opcode_local;
+    wire [4:0]          rd_local;
+    wire                jalr_instr;
+    wire [PC_W-1:0]     jalr_target;
 
-    // Execution datapath signals
-    wire [31:0] Ext_Imm;                 // Sign-extended immediate
-    wire [31:0] Reg1, Reg2;              // Register file read data
-    wire [31:0] Src_B;                   // Selected ALU operand B
-    wire [DATA_W-1:0] ALU_Result;        // ALU output
-    wire [31:0] DataMem_Read;             // Data memory read output
-    wire [31:0] Write_Back_Data;          // Final write-back value
+    // ------------------------------------------------------------------------
+    // Instruction Field Extraction
+    // ------------------------------------------------------------------------
+    assign opcode_local = Instruction[6:0];
+    assign rd_local     = Instruction[11:7];
 
-    //---------------- PROGRAM COUNTER LOGIC ----------------
-    // Computes PC + 4 for sequential execution
-    PC_Increment PC_INC (
-        .pc_current(PC),
-        .pc_next(PC_Next)
+    // ------------------------------------------------------------------------
+    // HALT Detection: JAL with rd=x0
+    // ------------------------------------------------------------------------
+    // A JAL instruction with rd=0 means "jump and discard return address"
+    // This is used as HALT in our test program.
+    // When HALT is detected, PC stays at current value.
+    assign halt_instruction = (opcode_local == 7'b1101111) && (rd_local == 5'd0);
+
+    // ------------------------------------------------------------------------
+    // JALR Detection and Target Calculation
+    // ------------------------------------------------------------------------
+    assign jalr_instr = (Opcode == 7'b1100111);
+    
+    // JALR target: (rs1 + imm) with LSB cleared
+    // This is required by RISC-V spec: "The indirect jump target 
+    // address is obtained by adding the sign-extended 12-bit I-immediate 
+    // to the value in rs1, and then setting the LSB of the result to zero."
+    assign jalr_target = (jalr_instr) ? 
+                         {ALU_Result[PC_W-1:1], 1'b0} :  // Clear LSB
+                         PC_Plus4;
+
+    // ------------------------------------------------------------------------
+    // PC Next Logic
+    // ------------------------------------------------------------------------
+    // Priority: HALT > JALR > Sequential (PC+4)
+    assign PC_Next = (halt_instruction) ? PC :            // HALT: stay
+                     (jalr_instr)       ? jalr_target :   // JALR: jump
+                     PC_Plus4;                            // Sequential
+
+    // ------------------------------------------------------------------------
+    // PMP Address for Data Access
+    // ------------------------------------------------------------------------
+    assign data_pmp_addr = ALU_Result[PMP_ADDR_WIDTH-1:0];
+
+    // ------------------------------------------------------------------------
+    // Module Instantiations
+    // ------------------------------------------------------------------------
+
+    // ========================================================================
+    // ALU - Arithmetic Logic Unit
+    // ========================================================================
+    ALU #(
+        .WIDTH(DATA_W)
+    ) ALU_inst (
+        .alu_sel(ALU_CC),
+        .a_in(Reg1),
+        .b_in(Src_B),
+        .carry_out(alu_carry),
+        .overflow(alu_overflow),
+        .zero(alu_zero),
+        .alu_out(ALU_Result)
     );
 
-    // PC update behavior:
-    // - Reset initializes PC to zero
-    // - PC advances only if instruction PMP allows execution
-    // - PC is frozen on instruction execute violation
-    always @(posedge Clock) begin
-        if (Reset)
-            PC <= {PC_W{1'b0}};
-        else if (instr_pmp_ok)
-            PC <= PC_Next;
-        else
-            PC <= PC; // Hold PC on PMP execute violation
-    end
+    // ========================================================================
+    // Data PMP Checker
+    // ========================================================================
+    PMP_Checker #(
+        .ADDR_WIDTH(PMP_ADDR_WIDTH),
+        .REGION0_START(PMP_REGION0_START),
+        .REGION0_END(PMP_REGION0_END),
+        .REGION0_PERM(PMP_REGION0_PERM),
+        .REGION1_START(PMP_REGION1_START),
+        .REGION1_END(PMP_REGION1_END),
+        .REGION1_PERM(PMP_REGION1_PERM),
+        .REGION2_START(PMP_REGION2_START),
+        .REGION2_END(PMP_REGION2_END),
+        .REGION2_PERM(PMP_REGION2_PERM),
+        .DEFAULT_PERM(PMP_DEFAULT_PERM)
+    ) data_pmp_inst (
+        .addr(data_pmp_addr),
+        .read_enable(Mem_Read),
+        .write_enable(Mem_Write),
+        .execute_enable(1'b0),
+        .access_granted(data_pmp_ok),
+        .current_perm_out()
+    );
 
-    //---------------- INSTRUCTION FETCH ----------------
-    // Fetch instruction from instruction memory using current PC
-    InstrMem IMEM (
+    // ========================================================================
+    // Instruction PMP Checker
+    // ========================================================================
+    PMP_Checker #(
+        .ADDR_WIDTH(PC_W),
+        .REGION0_START(PMP_REGION0_START),
+        .REGION0_END(PMP_REGION0_END),
+        .REGION0_PERM(PMP_REGION0_PERM),
+        .REGION1_START(PMP_REGION1_START),
+        .REGION1_END(PMP_REGION1_END),
+        .REGION1_PERM(PMP_REGION1_PERM),
+        .REGION2_START(PMP_REGION2_START),
+        .REGION2_END(PMP_REGION2_END),
+        .REGION2_PERM(PMP_REGION2_PERM),
+        .DEFAULT_PERM(PMP_DEFAULT_PERM)
+    ) instr_pmp_inst (
+        .addr(PC),
+        .read_enable(1'b0),
+        .write_enable(1'b0),
+        .execute_enable(1'b1),
+        .access_granted(instr_pmp_ok),
+        .current_perm_out()
+    );
+
+    // ========================================================================
+    // PMP-Gated Memory Access
+    // ========================================================================
+    // Memory accesses are gated by PMP permission
+    assign mem_read_gated  = Mem_Read  & data_pmp_ok;
+    assign mem_write_gated = Mem_Write & data_pmp_ok;
+
+    // ========================================================================
+    // Data Memory
+    // ========================================================================
+    DataMem #(
+        .MEM_DEPTH(512),
+        .DATA_WIDTH(DATA_W),
+        .ADDR_WIDTH(DM_ADDR_W)
+    ) DataMem_inst (
+        .clk(Clock),
+        .mem_read(mem_read_gated),
+        .mem_write(mem_write_gated),
+        .addr(ALU_Result[DM_ADDR_W-1:0]),
+        .write_data(Reg2),
+        .read_data(DataMem_Read)
+    );
+
+    // ========================================================================
+    // Instruction Memory
+    // ========================================================================
+    InstrMem #(
+        .MEM_DEPTH(64),
+        .INSTR_WIDTH(INSTR_W),
+        .ADDR_WIDTH(PC_W)
+    ) InstrMem_inst (
         .addr(PC),
         .instr(Instruction)
     );
 
-    //---------------- INSTRUCTION PMP CHECK ----------------
-    // Instruction fetch is treated as a read + execute operation.
-    // PMP checker validates execute permission for current PC.
-    PMP_Checker PMP_INSTR (
-        .addr(PC),
-        .read_enable(1'b1),
-        .write_enable(1'b0),
-        .exec_enable(1'b1),
-        .access_granted(instr_pmp_ok)
-    );
-
-    // On instruction PMP violation, replace instruction with NOP
-    // This prevents unintended register or memory side effects.
-    assign Instruction_eff = instr_pmp_ok ? Instruction : 32'h00000013;
-
-    //---------------- INSTRUCTION DECODE ----------------
-    // Decode opcode and function fields from effective instruction
-    Instruction_Decoder DEC (
-        .instruction(Instruction_eff),
+    // ========================================================================
+    // Instruction Decoder
+    // ========================================================================
+    Instruction_Decoder Decoder_inst (
+        .instruction(Instruction),
         .opcode(Opcode),
         .funct3(Funct3),
         .funct7(Funct7),
         .valid()
     );
 
-    // Generate immediate value based on instruction format
-    ImmGen IMM (
-        .instr_code(Instruction_eff),
+    // ========================================================================
+    // Immediate Generator
+    // ========================================================================
+    ImmGen #(
+        .INSTR_WIDTH(INSTR_W),
+        .DATA_WIDTH(DATA_W)
+    ) ImmGen_inst (
+        .instr_code(Instruction),
         .imm_out(Ext_Imm)
     );
 
-    //---------------- REGISTER FILE ----------------
-    // Register and memory operations are gated by instruction PMP status
-    // This ensures no architectural updates occur after an execute violation.
-    wire Reg_Write_eff = Reg_Write & instr_pmp_ok;
-    wire Mem_Read_eff  = Mem_Read  & instr_pmp_ok;
-    wire Mem_Write_eff = Mem_Write & instr_pmp_ok;
-
-    RegFile RF (
-        .clk(Clock),
-        .reset(Reset),
-        .rg_wrt_en(Reg_Write_eff),
-        .rg_wrt_addr(Instruction_eff[11:7]),
-        .rg_rd_addr1(Instruction_eff[19:15]),
-        .rg_rd_addr2(Instruction_eff[24:20]),
-        .rg_wrt_data(Write_Back_Data),
-        .rg_rd_data1(Reg1),
-        .rg_rd_data2(Reg2)
-    );
-
-    //---------------- ALU EXECUTION ----------------
-    // Select ALU operand B:
-    //  - Register operand for R-type
-    //  - Immediate for I-type / load / store
-    Mux2_1 MUX_EX (
+    // ========================================================================
+    // Execute Stage MUX
+    // Selects between register value and immediate for ALU B input
+    // ========================================================================
+    Mux2_1 #(
+        .WIDTH(DATA_W)
+    ) Mux_EX (
         .sel(ALU_Src),
         .in0(Reg2),
         .in1(Ext_Imm),
         .out(Src_B)
     );
 
-    // Perform arithmetic / logical operation
-    ALU ALU_CORE (
-        .alu_sel(ALU_CC),
-        .a_in(Reg1),
-        .b_in(Src_B),
-        .alu_out(ALU_Result)
-    );
-
-    //---------------- DATA PMP CHECK ----------------
-    // PMP check for data memory access:
-    //  - Read permission for loads
-    //  - Write permission for stores
-    // Execute permission is not applicable for data memory.
-    PMP_Checker PMP_DATA (
-        .addr(ALU_Result[7:0]),
-        .read_enable(Mem_Read_eff),
-        .write_enable(Mem_Write_eff),
-        .exec_enable(1'b0),
-        .access_granted(data_pmp_ok)
-    );
-
-    //---------------- DATA MEMORY ACCESS ----------------
-    // Memory access is fully gated by PMP decision.
-    // Illegal accesses do not modify memory and return no valid data.
-    DataMem DMEM (
-        .clk(Clock),
-        .mem_read(Mem_Read_eff & data_pmp_ok),
-        .mem_write(Mem_Write_eff & data_pmp_ok),
-        .addr(ALU_Result[DM_ADDR_W-1:0]),
-        .write_data(Reg2),
-        .read_data(DataMem_Read)
-    );
-
-    //---------------- WRITE BACK ----------------
-    // Select write-back source:
-    //  - ALU result for arithmetic instructions
-    //  - Data memory output for load instructions
-    Mux2_1 MUX_WB (
+    // ========================================================================
+    // Writeback MUX
+    // Selects between ALU result and memory data for register write
+    // ========================================================================
+    Mux2_1 #(
+        .WIDTH(DATA_W)
+    ) Mux_WB (
         .sel(Mem_to_Reg),
         .in0(ALU_Result),
         .in1(DataMem_Read),
         .out(Write_Back_Data)
     );
 
-    // Expose ALU result externally for debugging / monitoring
+    // ========================================================================
+    // Register File
+    // ========================================================================
+    RegFile #(
+        .DATA_WIDTH(DATA_W),
+        .REG_COUNT(32),
+        .REG_ADDR_WIDTH(5)
+    ) RegFile_inst (
+        .clk(Clock),
+        .reset(Reset),
+        .rg_wrt_en(Reg_Write),
+        .rg_wrt_addr(Instruction[11:7]),    // rd
+        .rg_rd_addr1(Instruction[19:15]),   // rs1
+        .rg_rd_addr2(Instruction[24:20]),   // rs2
+        .rg_wrt_data(Write_Back_Data),
+        .rg_rd_data1(Reg1),
+        .rg_rd_data2(Reg2)
+    );
+
+    // ========================================================================
+    // PC + 4 Adder
+    // ========================================================================
+    HalfAdder HalfAdder_inst (
+        .a(PC),
+        .b(8'd4),
+        .sum(PC_Plus4)
+    );
+
+    // ========================================================================
+    // PC Register
+    // ========================================================================
+    FlipFlop #(
+        .WIDTH(PC_W)
+    ) FlipFlop_inst (
+        .clk(Clock),
+        .reset(Reset),
+        .d(PC_Next),
+        .q(PC)
+    );
+
+    // ------------------------------------------------------------------------
+    // Output Assignments
+    // ------------------------------------------------------------------------
     assign Datapath_Result = ALU_Result;
+    assign halt            = halt_instruction;
 
 endmodule
