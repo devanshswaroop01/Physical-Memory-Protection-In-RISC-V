@@ -1,101 +1,135 @@
-
-`timescale 1ns/1ps
-//----------------------------------- Control Unit ----------------------------
-// Generates all high-level control signals for the single-cycle RISC-V datapath.
-// Decodes the opcode (and funct fields where required) to control:
-//  - Register write-back
-//  - ALU operand selection
-//  - ALU operation
-//  - Memory read/write
-//  - Write-back data source
-//
-// This unit is purely combinational and defaults to a safe NOP-like state.
-//-----------------------------------------------------------------------------
+// ----------------------------------------------------------------------------
+// MODULE 2: Control_Unit
+// ----------------------------------------------------------------------------
+/**
+ * CONTROL UNIT - Generates Main Control Signals
+ * 
+ * PURPOSE:
+ *   Decodes opcode and generates control signals for datapath
+ * 
+ * INPUTS:
+ *   opcode[6:0] - Instruction opcode
+ *   funct3[2:0] - Function field 3
+ *   funct7[6:0] - Function field 7
+ * 
+ * OUTPUTS:
+ *   reg_write  - Enable register write
+ *   alu_src    - ALU source (0=register, 1=immediate)
+ *   alu_cc     - ALU control code
+ *   mem_read   - Enable memory read
+ *   mem_write  - Enable memory write
+ *   mem_to_reg - Writeback source (0=ALU, 1=memory)
+ * 
+ * INSTRUCTIONS SUPPORTED:
+ *   R-Type: ADD, SUB, AND, OR, SLT
+ *   I-Type: ADDI, ANDI, ORI, SLTI
+ *   Load:   LW
+ *   Store:  SW
+ *   Jump:   JALR
+ *   HALT:   JAL with rd=x0 (handled in datapath)
+ */
 `timescale 1ns / 1ps
 
-module Control_Unit(
-    input  wire [6:0] opcode,     // Instruction opcode
-    input  wire [2:0] funct3,     // Function field (used for ALU ops)
-    input  wire [6:0] funct7,     // Function field (used for ADD/SUB)
-    output reg        reg_write,  // Enables register file write
-    output reg        alu_src,    // Selects ALU operand (0=Reg2, 1=Immediate)
-    output reg [3:0]  alu_cc,     // ALU control code
-    output reg        mem_read,   // Enables data memory read
-    output reg        mem_write,  // Enables data memory write
-    output reg        mem_to_reg  // Selects write-back source (0=ALU, 1=Memory)
+module Control_Unit (
+    input  wire [6:0] opcode,
+    input  wire [2:0] funct3,
+    input  wire [6:0] funct7,
+    output reg        reg_write,
+    output reg        alu_src,
+    output reg  [3:0] alu_cc,
+    output reg        mem_read,
+    output reg        mem_write,
+    output reg        mem_to_reg
 );
 
     always @(*) begin
-        // ---------------- SAFE DEFAULTS ----------------
-        // These defaults ensure a NOP-like behavior for
-        // unsupported or invalid instructions.
+        // ----------------------------------------------------------------
+        // Default Values
+        // ----------------------------------------------------------------
         reg_write  = 1'b0;
         alu_src    = 1'b0;
-        alu_cc     = 4'b0010; // Default ALU operation = ADD
+        alu_cc     = 4'b0010;   // ADD
         mem_read   = 1'b0;
         mem_write  = 1'b0;
         mem_to_reg = 1'b0;
 
         case (opcode)
-
-            // ---------------- R-TYPE INSTRUCTIONS ----------------
-            // Examples: ADD, SUB, AND, OR, SLT
-            // Operands come from registers, result written back.
+            // ============================================================
+            // R-Type Instructions (opcode = 7'b0110011)
+            // ADD, SUB, AND, OR, SLT
+            // ============================================================
             7'b0110011: begin
                 reg_write = 1'b1;
-                alu_src   = 1'b0;  // Use register operand
+                alu_src   = 1'b0;
                 case (funct3)
-                    3'b000: alu_cc = funct7[5] ? 4'b0110 : 4'b0010; // SUB / ADD
-                    3'b111: alu_cc = 4'b0000; // AND
-                    3'b110: alu_cc = 4'b0001; // OR
-                    3'b010: alu_cc = 4'b0111; // SLT
+                    3'b000: alu_cc = (funct7 == 7'b0100000) ? 4'b0110 : 4'b0010;
+                    3'b111: alu_cc = 4'b0000;  // AND
+                    3'b110: alu_cc = 4'b0001;  // OR
+                    3'b010: alu_cc = 4'b0111;  // SLT
                     default: alu_cc = 4'b0010;
                 endcase
             end
 
-            // ---------------- I-TYPE INSTRUCTIONS ----------------
-            // Example: ADDI
-            // One register operand + immediate
+            // ============================================================
+            // I-Type Instructions (opcode = 7'b0010011)
+            // ADDI, ANDI, ORI, SLTI
+            // ============================================================
             7'b0010011: begin
                 reg_write = 1'b1;
-                alu_src   = 1'b1;  // Use immediate
-                alu_cc    = 4'b0010; // ADD
+                alu_src   = 1'b1;
+                case (funct3)
+                    3'b000: alu_cc = 4'b0010;  // ADDI
+                    3'b111: alu_cc = 4'b0000;  // ANDI
+                    3'b110: alu_cc = 4'b0001;  // ORI
+                    3'b010: alu_cc = 4'b0111;  // SLTI
+                    default: alu_cc = 4'b0010;
+                endcase
             end
 
-            // ---------------- LOAD (LW) ----------------
-            // Address = base register + immediate
-            // Data loaded from memory is written back to register
+            // ============================================================
+            // Load Word (opcode = 7'b0000011)
+            // LW xN, offset(xM)
+            // ============================================================
             7'b0000011: begin
                 reg_write  = 1'b1;
                 alu_src    = 1'b1;
                 mem_read   = 1'b1;
-                mem_to_reg = 1'b1; // Select memory data for write-back
-                alu_cc     = 4'b0010; // Address calculation
+                mem_to_reg = 1'b1;
+                alu_cc     = 4'b0010;  // ADD for address
             end
 
-            // ---------------- STORE (SW) ----------------
-            // Address = base register + immediate
-            // Data written to memory, no register write-back
+            // ============================================================
+            // Store Word (opcode = 7'b0100011)
+            // SW xN, offset(xM)
+            // ============================================================
             7'b0100011: begin
                 alu_src   = 1'b1;
                 mem_write = 1'b1;
-                alu_cc    = 4'b0010;
+                alu_cc    = 4'b0010;  // ADD for address
             end
 
-            // ---------------- JALR ----------------
-            // Computes jump target using register + immediate
-            // Writes return address to destination register
+            // ============================================================
+            // JALR (opcode = 7'b1100111)
+            // JALR xN, offset(xM)
+            // ============================================================
             7'b1100111: begin
                 reg_write = 1'b1;
                 alu_src   = 1'b1;
-                alu_cc    = 4'b0010;
+                alu_cc    = 4'b0010;  // ADD for target address
             end
 
-            // ---------------- DEFAULT ----------------
-            // Unsupported instructions behave as NOP
-            default: ; 
+            // ============================================================
+            // Default: NOP or Unsupported
+            // ============================================================
+            default: begin
+                reg_write  = 1'b0;
+                alu_src    = 1'b0;
+                alu_cc     = 4'b0010;
+                mem_read   = 1'b0;
+                mem_write  = 1'b0;
+                mem_to_reg = 1'b0;
+            end
         endcase
     end
 
-endmodule
- 
+endmodule 
