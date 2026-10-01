@@ -1,32 +1,40 @@
 
-`timescale 1ns/1ps
-//--------------------------------------------------------
-// 8-bit Flip-Flop (Register)
-// Used as the Program Counter (PC) register in the processor
-//--------------------------------------------------------
-module FlipFlop(clk, reset, d, q);
 
-    // -------- I/O Signals --------
-    // clk   : system clock
-    // reset : synchronous reset (active high)
-    // d     : next-state input
-    // q     : registered output (current state)
-    input       clk;
-    input       reset;
-    input [7:0] d;
-    output reg [7:0] q;
- 
-    // -------- Functional Behavior --------
-    // On every rising edge of the clock:
-    // - If reset is asserted, clear the register to 0
-    // - Otherwise, latch the input value 'd' into 'q'
+// ----------------------------------------------------------------------------
+// MODULE 3: FlipFlop - Parameterized D Flip-Flop with Reset
+// ----------------------------------------------------------------------------
+/**
+ * FLIPFLOP - D Flip-Flop with Synchronous Reset
+ * 
+ * PURPOSE:
+ *   Stores state for Program Counter
+ *   Updates on positive clock edge
+ * 
+ * PARAMETERS:
+ *   WIDTH - Data width (default 8)
+ * 
+ * INPUTS:
+ *   clk   - Clock signal (rising edge triggered)
+ *   reset - Active-high reset
+ *   d     - Data input
+ * 
+ * OUTPUTS:
+ *   q     - Stored data
+ * 
+ * TIMING:
+ *   - Reset is synchronous (sampled on clock edge)
+ *   - Data captured on rising edge
+ */
+module FlipFlop #(
+    parameter WIDTH = 8
+)(
+    input  wire             clk,
+    input  wire             reset,
+    input  wire [WIDTH-1:0] d,
+    output reg  [WIDTH-1:0] q
+);
     always @(posedge clk) begin
-        if (reset) begin
-            q <= 8'b0;   // Reset PC or register value
-        end
-        else begin
-            q <= d;      // Normal state update
-        end
-    end
-
-endmodule // FlipFlop
+        if (reset)
+            q <= {WIDTH{1'b0}};
+        else
+            q <= d;
