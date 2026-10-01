@@ -1,47 +1,82 @@
-
-`timescale 1ns/1ps
-//---------------------ALU Controller -------------------------
-// Generates ALU operation codes based on instruction type
-// Decouples instruction decoding from ALU implementation
-//-------------------------------------------------------------
+// ----------------------------------------------------------------------------
+// MODULE 1: ALUController
+// ----------------------------------------------------------------------------
+/**
+ * ALU CONTROLLER - Generates ALU Operation from Instruction Fields
+ * 
+ * PURPOSE:
+ *   Maps instruction fields (ALU_Op, Funct3, Funct7) to ALU operation
+ * 
+ * ALU_OP ENCODING:
+ *   2'b00 - Load/Store (ADD for address calculation)
+ *   2'b01 - Branch (SUB for comparison)
+ *   2'b10 - R-Type
+ *   2'b11 - I-Type
+ * 
+ * OUTPUT OPERATION CODES:
+ *   4'b0000 - AND
+ *   4'b0001 - OR
+ *   4'b0010 - ADD
+ *   4'b0110 - SUB
+ *   4'b0111 - SLT
+ */
 module ALUController (
-    input  [1:0] ALU_Op,       // High-level ALU operation from main controller
-    input  [2:0] Funct3,       // Instruction funct3 field
-    input  [6:0] Funct7,       // Instruction funct7 field
-    output reg [3:0] Operation // Final ALU control signal
+    input  wire [1:0] ALU_Op,
+    input  wire [2:0] Funct3,
+    input  wire [6:0] Funct7,
+    output reg  [3:0] Operation
 );
 
     always @(*) begin
-        // Default safe operation (AND)
-        Operation = 4'b0000;
+        // Default: ADD
+        Operation = 4'b0010;
 
         case (ALU_Op)
-
-            // Load / Store instructions → address calculation
+            // ----------------------------------------------------------------
+            // 2'b00: Load/Store - Use ADD for address calculation
+            // ----------------------------------------------------------------
             2'b00: begin
-                Operation = 4'b0010; // ADD
+                Operation = 4'b0010;
             end
 
-            // Branch instructions → comparison via subtraction
+            // ----------------------------------------------------------------
+            // 2'b01: Branch - Use SUB for comparison
+            // ----------------------------------------------------------------
             2'b01: begin
-                Operation = 4'b0110; // SUB
+                Operation = 4'b0110;
             end
 
-            // R-type / I-type arithmetic instructions
+            // ----------------------------------------------------------------
+            // 2'b10: R-Type Instructions
+            // ----------------------------------------------------------------
             2'b10: begin
                 case (Funct3)
-                    3'b000: Operation = (Funct7[5]) ? 4'b0110 : 4'b0010; // SUB / ADD
-                    3'b111: Operation = 4'b0000; // AND
-                    3'b110: Operation = 4'b0001; // OR
-                    3'b100: Operation = 4'b1100; // NOR
-                    3'b010: Operation = 4'b0111; // SLT
-                    default: Operation = 4'b0000;
+                    3'b000: Operation = (Funct7[5]) ? 4'b0110 : 4'b0010; // SUB/ADD
+                    3'b111: Operation = 4'b0000;  // AND
+                    3'b110: Operation = 4'b0001;  // OR
+                    3'b010: Operation = 4'b0111;  // SLT
+                    default: Operation = 4'b0010;
                 endcase
             end
 
-            // Any undefined ALU_Op maps to safe default
-            default: Operation = 4'b0000;
+            // ----------------------------------------------------------------
+            // 2'b11: I-Type Instructions
+            // ----------------------------------------------------------------
+            2'b11: begin
+                case (Funct3)
+                    3'b000: Operation = 4'b0010;  // ADDI
+                    3'b111: Operation = 4'b0000;  // ANDI
+                    3'b110: Operation = 4'b0001;  // ORI
+                    3'b010: Operation = 4'b0111;  // SLTI
+                    default: Operation = 4'b0010;
+                endcase
+            end
+
+            default: begin
+                Operation = 4'b0010;
+            end
         endcase
     end
 
 endmodule
+ 
