@@ -1,40 +1,36 @@
 
-
 // ----------------------------------------------------------------------------
-// MODULE 3: FlipFlop - Parameterized D Flip-Flop with Reset
+// MODULE 2: Mux2_1 - Parameterized 2-to-1 Multiplexer
 // ----------------------------------------------------------------------------
 /**
- * FLIPFLOP - D Flip-Flop with Synchronous Reset
+ * MUX2_1 - 2-to-1 Multiplexer (Parameterized Width)
  * 
  * PURPOSE:
- *   Stores state for Program Counter
- *   Updates on positive clock edge
+ *   Selects between two inputs based on select signal
+ *   Used for:
+ *     - ALU source selection (register vs immediate)
+ *     - Writeback selection (ALU result vs memory data)
  * 
  * PARAMETERS:
- *   WIDTH - Data width (default 8)
+ *   WIDTH - Data width (default 32)
  * 
  * INPUTS:
- *   clk   - Clock signal (rising edge triggered)
- *   reset - Active-high reset
- *   d     - Data input
+ *   sel  - Select signal (0 = in0, 1 = in1)
+ *   in0  - First input
+ *   in1  - Second input
  * 
  * OUTPUTS:
- *   q     - Stored data
- * 
- * TIMING:
- *   - Reset is synchronous (sampled on clock edge)
- *   - Data captured on rising edge
+ *   out  - Selected input
  */
-module FlipFlop #(
-    parameter WIDTH = 8
+`timescale 1ns / 1ps
+
+module Mux2_1 #(
+    parameter WIDTH = 32
 )(
-    input  wire             clk,
-    input  wire             reset,
-    input  wire [WIDTH-1:0] d,
-    output reg  [WIDTH-1:0] q
+    input  wire             sel,
+    input  wire [WIDTH-1:0] in0,
+    input  wire [WIDTH-1:0] in1,
+    output wire [WIDTH-1:0] out
 );
-    always @(posedge clk) begin
-        if (reset)
-            q <= {WIDTH{1'b0}};
-        else
-            q <= d;
+    assign out = sel ? in1 : in0;
+endmodule 
