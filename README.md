@@ -460,41 +460,6 @@ These limitations define the project's scope and provide natural directions for 
 
 ---
 
-## 🎓 Interview / Defense Discussion Points
-
-This project is particularly suitable for discussing:
-
-- Why RISC-V?
-- Why a single-cycle architecture?
-- How does an instruction travel through the datapath?
-- How does the ALU generate memory addresses?
-- How does the register file work?
-- How are immediates generated?
-- How is JALR implemented?
-- What is PMP?
-- Why are R/W/X permissions required?
-- How is the PMP region selected?
-- What happens when an access is denied?
-- How did you verify PMP behavior?
-- Why use a reference model?
-- What does the scoreboard compare?
-- How did waveform analysis help debugging?
-- What are the limitations of a single-cycle CPU?
-- How would you pipeline this processor?
-- How would you implement traps?
-- How would you make PMP dynamically configurable?
-- How would you extend the verification environment to UVM?
-
----
-
-## 📝 Example Defense Explanation
-
-A concise explanation of the project:
-
-> "I designed a 32-bit single-cycle RISC-V processor in Verilog implementing a selected RV32I instruction subset. I integrated a fixed-region PMP-style hardware protection mechanism that checks read, write and execute permissions for configured address regions. I also developed a directed verification environment containing a behavioral reference model, scoreboard, PMP violation checker and waveform-based debug infrastructure. The verification program specifically exercises permitted accesses and four classes of PMP violations: unauthorized load, unauthorized store, unauthorized instruction execution and access to the default protected region."
-
----
-
 ## 📌 Project Significance
 
 The main value of this project is the integration of three areas:
